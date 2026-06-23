@@ -129,7 +129,29 @@ def generate_briefing(emails, events):
     return '\n'.join(lines)
 
 
-def update_gist(content):
+def generate_summary(emails, events):
+    now = datetime.now(TWN)
+    weekday = ['一', '二', '三', '四', '五', '六', '日'][now.weekday()]
+    date_str = f"{now.month}/{now.day}（{weekday}）"
+
+    lines = [date_str, ""]
+
+    if events:
+        for e in events:
+            start = e['start']
+            if 'T' in start:
+                lines.append(f"行程 {start[11:16]} {e['summary']}")
+            else:
+                lines.append(f"行程（全天）{e['summary']}")
+    else:
+        lines.append("今天沒有行程")
+
+    lines.append(f"未讀信件 {len(emails)} 封")
+
+    return '\n'.join(lines)
+
+
+def update_gist(briefing, summary):
     headers = {
         'Authorization': f"token {os.environ['GIST_TOKEN']}",
         'Accept': 'application/vnd.github.v3+json',
@@ -137,7 +159,10 @@ def update_gist(content):
     resp = requests.patch(
         f"https://api.github.com/gists/{os.environ['GIST_ID']}",
         headers=headers,
-        json={'files': {'morning-briefing.md': {'content': content}}},
+        json={'files': {
+            'morning-briefing.md': {'content': briefing},
+            'morning-briefing-summary.txt': {'content': summary},
+        }},
     )
     if resp.status_code == 200:
         print('早報已更新到 Gist！')
@@ -151,5 +176,6 @@ if __name__ == '__main__':
     emails = get_gmail_threads(creds)
     events = get_calendar_events(creds)
     briefing = generate_briefing(emails, events)
+    summary = generate_summary(emails, events)
     print(briefing)
-    update_gist(briefing)
+    update_gist(briefing, summary)
