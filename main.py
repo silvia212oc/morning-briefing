@@ -114,7 +114,7 @@ def generate_briefing(emails, events):
 （根據以上資訊，用 2-3 句話點出今天最需要注意的事或優先處理的任務）"""
 
     genai.configure(api_key=os.environ['GEMINI_API_KEY'])
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    model = genai.GenerativeModel('gemini-2.0-flash')
     response = model.generate_content(prompt)
     return response.text
 
