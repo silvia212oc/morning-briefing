@@ -78,8 +78,9 @@ def generate_briefing(emails, events):
     date_str = f"{now.year} 年 {now.month} 月 {now.day} 日 {WEEKDAYS[now.weekday()]}"
 
     lines = [
-        "# Silvia 的晨間早報",
-        f"**{date_str}**",
+        f"# {date_str} 早報",
+        "",
+        "---",
         "",
         "## 今日行程",
     ]
@@ -88,43 +89,40 @@ def generate_briefing(emails, events):
         for e in events:
             start = e['start']
             if 'T' in start:
-                time_part = start[11:16]
-                loc = f"（{e['location']}）" if e['location'] else ""
-                lines.append(f"- {time_part} {e['summary']}{loc}")
+                loc = f"  {e['location']}" if e['location'] else ""
+                lines.append(f"- **{start[11:16]}** {e['summary']}{loc}")
             else:
-                loc = f"（{e['location']}）" if e['location'] else ""
-                lines.append(f"- 全天 {e['summary']}{loc}")
+                loc = f"  {e['location']}" if e['location'] else ""
+                lines.append(f"- 全天  {e['summary']}{loc}")
     else:
-        lines.append("今天行程空白，可以好好利用！")
+        lines.append("今天行程空白，可以好好利用。")
 
-    lines += ["", "## 重要信件"]
+    lines += ["", "## 未讀信件"]
 
     if emails:
         for e in emails:
             sender = e['from'].split('<')[0].strip() or e['from']
-            snippet = e['snippet'][:80] + "…" if len(e['snippet']) > 80 else e['snippet']
+            snippet = e['snippet'][:100] + "…" if len(e['snippet']) > 100 else e['snippet']
             lines.append(f"- **{sender}**：{e['subject']}")
             if snippet:
-                lines.append(f"  {snippet}")
+                lines.append(f"  _{snippet}_")
     else:
-        lines.append("信箱很乾淨！")
+        lines.append("信箱很乾淨。")
 
-    lines += ["", "## 今日建議重點"]
+    lines += ["", "---", ""]
 
-    tips = []
-    if events:
+    if events and emails:
         first = events[0]
-        start = first['start']
-        if 'T' in start:
-            tips.append(f"今天第一個行程是 {start[11:16]} 的「{first['summary']}」，記得提前準備。")
-        else:
-            tips.append(f"今天有全天行程「{first['summary']}」，注意時間安排。")
-    if emails:
-        tips.append(f"信箱有 {len(emails)} 封未讀信件，建議早上先快速過濾，標記需要回覆的。")
-    if not tips:
-        tips.append("今天行程和信件都很清爽，適合處理需要專注的工作或學習。")
-
-    lines += tips
+        t = first['start'][11:16] if 'T' in first['start'] else '全天'
+        lines.append(f"今天 {t} 有「{first['summary']}」，記得留意時間。信箱有 {len(emails)} 封未讀，早上可以先掃一遍。")
+    elif events:
+        first = events[0]
+        t = first['start'][11:16] if 'T' in first['start'] else '全天'
+        lines.append(f"今天 {t} 有「{first['summary']}」，記得留意。信件方面很清爽，專心準備行程就好。")
+    elif emails:
+        lines.append(f"今天沒有行程，信箱有 {len(emails)} 封未讀。可以趁空檔清理信件、推進手邊的事。")
+    else:
+        lines.append("今天行程和信件都是空的，是個難得清爽的一天，好好安排自己的時間。")
 
     return '\n'.join(lines)
 
@@ -132,7 +130,7 @@ def generate_briefing(emails, events):
 def generate_summary(emails, events):
     now = datetime.now(TWN)
     weekday = ['一', '二', '三', '四', '五', '六', '日'][now.weekday()]
-    date_str = f"{now.month}/{now.day}（{weekday}）"
+    date_str = f"{now.month}/{now.day}（{weekday}）早安"
 
     lines = [date_str, ""]
 
@@ -140,13 +138,13 @@ def generate_summary(emails, events):
         for e in events:
             start = e['start']
             if 'T' in start:
-                lines.append(f"行程 {start[11:16]} {e['summary']}")
+                lines.append(f"行程  {start[11:16]} {e['summary']}")
             else:
                 lines.append(f"行程（全天）{e['summary']}")
     else:
         lines.append("今天沒有行程")
 
-    lines.append(f"未讀信件 {len(emails)} 封")
+    lines.append(f"未讀信件  {len(emails)} 封")
 
     return '\n'.join(lines)
 
