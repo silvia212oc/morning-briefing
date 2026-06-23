@@ -28,7 +28,7 @@ def load_google_creds():
 def get_gmail_threads(creds):
     service = build('gmail', 'v1', credentials=creds)
     result = service.users().threads().list(
-        userId='me', q='is:unread newer_than:1d', maxResults=10
+        userId='me', q='is:unread newer_than:1d category:primary', maxResults=10
     ).execute()
 
     emails = []
@@ -76,53 +76,55 @@ def get_calendar_events(creds):
 def generate_briefing(emails, events):
     now = datetime.now(TWN)
     date_str = f"{now.year} 年 {now.month} 月 {now.day} 日 {WEEKDAYS[now.weekday()]}"
+    divider = "─" * 24
 
     lines = [
-        f"# {date_str} 早報",
+        f"Silvia 的晨間早報",
+        f"{date_str}",
+        divider,
         "",
-        "---",
-        "",
-        "## 今日行程",
+        "今日行程",
     ]
 
     if events:
         for e in events:
             start = e['start']
             if 'T' in start:
-                loc = f"  {e['location']}" if e['location'] else ""
-                lines.append(f"- **{start[11:16]}** {e['summary']}{loc}")
+                loc = f"　{e['location']}" if e['location'] else ""
+                lines.append(f"  {start[11:16]}　{e['summary']}{loc}")
             else:
-                loc = f"  {e['location']}" if e['location'] else ""
-                lines.append(f"- 全天  {e['summary']}{loc}")
+                loc = f"　{e['location']}" if e['location'] else ""
+                lines.append(f"  全天　{e['summary']}{loc}")
     else:
-        lines.append("今天行程空白，可以好好利用。")
+        lines.append("  今天沒有行程，可以好好利用。")
 
-    lines += ["", "## 未讀信件"]
+    lines += ["", divider, "", "重要信件"]
 
     if emails:
         for e in emails:
             sender = e['from'].split('<')[0].strip() or e['from']
-            snippet = e['snippet'][:100] + "…" if len(e['snippet']) > 100 else e['snippet']
-            lines.append(f"- **{sender}**：{e['subject']}")
-            if snippet:
-                lines.append(f"  _{snippet}_")
+            lines.append(f"  {sender}")
+            lines.append(f"  {e['subject']}")
+            if e['snippet']:
+                lines.append(f"  {e['snippet'][:80]}…")
+            lines.append("")
     else:
-        lines.append("信箱很乾淨。")
+        lines.append("  信箱很乾淨。")
 
-    lines += ["", "---", ""]
+    lines += [divider, ""]
 
     if events and emails:
         first = events[0]
         t = first['start'][11:16] if 'T' in first['start'] else '全天'
-        lines.append(f"今天 {t} 有「{first['summary']}」，記得留意時間。信箱有 {len(emails)} 封未讀，早上可以先掃一遍。")
+        lines.append(f"今天 {t} 有「{first['summary']}」，記得留意時間。信箱有 {len(emails)} 封主要信件，早上可以先掃一遍。")
     elif events:
         first = events[0]
         t = first['start'][11:16] if 'T' in first['start'] else '全天'
         lines.append(f"今天 {t} 有「{first['summary']}」，記得留意。信件方面很清爽，專心準備行程就好。")
     elif emails:
-        lines.append(f"今天沒有行程，信箱有 {len(emails)} 封未讀。可以趁空檔清理信件、推進手邊的事。")
+        lines.append(f"今天沒有行程，信箱有 {len(emails)} 封主要信件。可以趁空檔清理信件、推進手邊的事。")
     else:
-        lines.append("今天行程和信件都是空的，是個難得清爽的一天，好好安排自己的時間。")
+        lines.append("今天行程和信件都是空的，難得清爽的一天，好好安排自己的時間。")
 
     return '\n'.join(lines)
 
