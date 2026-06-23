@@ -5,7 +5,6 @@ from datetime import datetime, timedelta, timezone
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
-import google.generativeai as genai
 
 TWN = timezone(timedelta(hours=8))
 WEEKDAYS = ['星期一', '星期二', '星期三', '星期四', '星期五', '星期六', '星期日']
@@ -78,45 +77,56 @@ def generate_briefing(emails, events):
     now = datetime.now(TWN)
     date_str = f"{now.year} 年 {now.month} 月 {now.day} 日 {WEEKDAYS[now.weekday()]}"
 
-    emails_text = '\n'.join(
-        f"- 寄件人：{e['from']}\n  主旨：{e['subject']}\n  摘要：{e['snippet']}"
-        for e in emails
-    ) or '無未讀信件'
+    lines = [
+        "# Silvia 的晨間早報",
+        f"**{date_str}**",
+        "",
+        "## 今日行程",
+    ]
 
-    events_text = '\n'.join(
-        f"- {e['start'][:16].replace('T', ' ')}: {e['summary']}" +
-        (f" @ {e['location']}" if e['location'] else '')
-        for e in events
-    ) or '今天沒有行程'
+    if events:
+        for e in events:
+            start = e['start']
+            if 'T' in start:
+                time_part = start[11:16]
+                loc = f"（{e['location']}）" if e['location'] else ""
+                lines.append(f"- {time_part} {e['summary']}{loc}")
+            else:
+                loc = f"（{e['location']}）" if e['location'] else ""
+                lines.append(f"- 全天 {e['summary']}{loc}")
+    else:
+        lines.append("今天行程空白，可以好好利用！")
 
-    prompt = f"""你是 Silvia 的 AI 助理，請根據以下資訊整理今天的晨間早報。
+    lines += ["", "## 重要信件"]
 
-今天日期：{date_str}
+    if emails:
+        for e in emails:
+            sender = e['from'].split('<')[0].strip() or e['from']
+            snippet = e['snippet'][:80] + "…" if len(e['snippet']) > 80 else e['snippet']
+            lines.append(f"- **{sender}**：{e['subject']}")
+            if snippet:
+                lines.append(f"  {snippet}")
+    else:
+        lines.append("信箱很乾淨！")
 
-今日 Google Calendar 行程：
-{events_text}
+    lines += ["", "## 今日建議重點"]
 
-過去 24 小時未讀信件：
-{emails_text}
+    tips = []
+    if events:
+        first = events[0]
+        start = first['start']
+        if 'T' in start:
+            tips.append(f"今天第一個行程是 {start[11:16]} 的「{first['summary']}」，記得提前準備。")
+        else:
+            tips.append(f"今天有全天行程「{first['summary']}」，注意時間安排。")
+    if emails:
+        tips.append(f"信箱有 {len(emails)} 封未讀信件，建議早上先快速過濾，標記需要回覆的。")
+    if not tips:
+        tips.append("今天行程和信件都很清爽，適合處理需要專注的工作或學習。")
 
-請用以下格式輸出早報，語氣自然親切像朋友，全程繁體中文，不要用 emoji：
+    lines += tips
 
-# Silvia 的晨間早報
-**{date_str}**
-
-## 今日行程
-（列出所有行程，時間序排列；若沒有行程就說「今天行程空白，可以好好利用！」）
-
-## 重要信件
-（列出值得注意的信件並一句話摘要；純廣告或通知類可略過；若沒有就說「信箱很乾淨！」）
-
-## 今日建議重點
-（根據以上資訊，用 2-3 句話點出今天最需要注意的事或優先處理的任務）"""
-
-    genai.configure(api_key=os.environ['GEMINI_API_KEY'])
-    model = genai.GenerativeModel('gemini-2.0-flash')
-    response = model.generate_content(prompt)
-    return response.text
+    return '\n'.join(lines)
 
 
 def update_gist(content):
