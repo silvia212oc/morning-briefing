@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
-import anthropic
+import google.generativeai as genai
 
 TWN = timezone(timedelta(hours=8))
 WEEKDAYS = ['星期一', '星期二', '星期三', '星期四', '星期五', '星期六', '星期日']
@@ -113,13 +113,10 @@ def generate_briefing(emails, events):
 ## 今日建議重點
 （根據以上資訊，用 2-3 句話點出今天最需要注意的事或優先處理的任務）"""
 
-    client = anthropic.Anthropic(api_key=os.environ['ANTHROPIC_API_KEY'])
-    message = client.messages.create(
-        model='claude-sonnet-4-6',
-        max_tokens=1500,
-        messages=[{'role': 'user', 'content': prompt}],
-    )
-    return message.content[0].text
+    genai.configure(api_key=os.environ['GEMINI_API_KEY'])
+    model = genai.GenerativeModel('gemini-1.5-flash')
+    response = model.generate_content(prompt)
+    return response.text
 
 
 def update_gist(content):
