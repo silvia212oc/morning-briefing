@@ -27,7 +27,8 @@ def load_google_creds():
     return creds
 
 
-FINANCIAL_KEYWORDS = ['永豐金']
+FINANCIAL_FROM_KEYWORDS = ['永豐金']
+INVENTORY_SUBJECT_KEYWORDS = ['庫存提醒']
 
 
 def get_email_body(service, msg_id):
@@ -82,6 +83,35 @@ def summarize_financial_email(body):
         return None
 
 
+def summarize_inventory_email(body):
+    gemini_key = os.environ.get('GEMINI_API_KEY')
+    if not gemini_key or not body:
+        return None
+    try:
+        import google.generativeai as genai
+        genai.configure(api_key=gemini_key)
+        model = genai.GenerativeModel('gemini-2.0-flash')
+        prompt = f"""以下是一封庫存提醒信件，請萃取出關鍵資訊。
+
+輸出格式（純文字，不要 Markdown 符號）：
+
+提醒項目
+- 品項名稱或料號：狀態（如：庫存不足、低於安全庫存）
+- 數量：xxx（如有）
+
+建議行動
+- xxx（一句話）
+
+規則：繁體中文，保留料號、型號等英數字編碼，簡潔，每區最多 5 條。
+
+郵件內容：
+{body[:3000]}"""
+        response = model.generate_content(prompt)
+        return response.text.strip()
+    except Exception:
+        return None
+
+
 def get_gmail_threads(creds):
     service = build('gmail', 'v1', credentials=creds)
     result = service.users().threads().list(
@@ -102,11 +132,15 @@ def get_gmail_threads(creds):
                 'subject': headers.get('Subject', ''),
                 'snippet': msgs[0].get('snippet', '')[:120],
                 'financial_summary': None,
+                'inventory_summary': None,
             }
-            combined = f"{email['from']} {email['subject']}"
-            if any(kw in combined for kw in FINANCIAL_KEYWORDS):
+            sender_subject = f"{email['from']} {email['subject']}"
+            if any(kw in sender_subject for kw in FINANCIAL_FROM_KEYWORDS):
                 body = get_email_body(service, msgs[0]['id'])
                 email['financial_summary'] = summarize_financial_email(body)
+            elif any(kw in email['subject'] for kw in INVENTORY_SUBJECT_KEYWORDS):
+                body = get_email_body(service, msgs[0]['id'])
+                email['inventory_summary'] = summarize_inventory_email(body)
             emails.append(email)
     return emails
 
@@ -208,8 +242,9 @@ def generate_briefing(emails, events, weather=None):
     else:
         lines.append("  今天沒有行程，可以好好利用。")
 
-    regular_emails = [e for e in emails if not e.get('financial_summary')]
+    regular_emails = [e for e in emails if not e.get('financial_summary') and not e.get('inventory_summary')]
     financial_emails = [e for e in emails if e.get('financial_summary')]
+    inventory_emails = [e for e in emails if e.get('inventory_summary')]
 
     lines += ["", divider, "", "📬 未讀信件"]
 
@@ -223,6 +258,15 @@ def generate_briefing(emails, events, weather=None):
             lines.append("")
     else:
         lines.append("  信箱很乾淨。")
+
+    if inventory_emails:
+        lines += ["", divider, "", "📦 庫存提醒"]
+        for e in inventory_emails:
+            lines.append(f"  {e['subject']}")
+            lines.append("")
+            for line in e['inventory_summary'].splitlines():
+                lines.append(f"  {line}")
+            lines.append("")
 
     if financial_emails:
         lines += ["", divider, "", "📊 金融日報重點"]
