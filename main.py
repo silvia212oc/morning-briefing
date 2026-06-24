@@ -1,5 +1,7 @@
 import os
+import re
 import json
+import base64
 import requests
 from datetime import datetime, timedelta, timezone
 from google.oauth2.credentials import Credentials
@@ -25,6 +27,61 @@ def load_google_creds():
     return creds
 
 
+FINANCIAL_KEYWORDS = ['永豐金']
+
+
+def get_email_body(service, msg_id):
+    msg = service.users().messages().get(userId='me', id=msg_id, format='full').execute()
+
+    def extract(payload):
+        mime = payload.get('mimeType', '')
+        if mime == 'text/plain':
+            data = payload.get('body', {}).get('data', '')
+            if data:
+                return base64.urlsafe_b64decode(data + '==').decode('utf-8', errors='ignore')
+        elif mime == 'text/html':
+            data = payload.get('body', {}).get('data', '')
+            if data:
+                raw = base64.urlsafe_b64decode(data + '==').decode('utf-8', errors='ignore')
+                clean = re.sub(r'<[^>]+>', ' ', raw)
+                return re.sub(r'\s+', ' ', clean).strip()
+        for part in payload.get('parts', []):
+            result = extract(part)
+            if result:
+                return result
+        return ''
+
+    return extract(msg.get('payload', {}))
+
+
+def summarize_financial_email(body):
+    gemini_key = os.environ.get('GEMINI_API_KEY')
+    if not gemini_key or not body:
+        return None
+    try:
+        import google.generativeai as genai
+        genai.configure(api_key=gemini_key)
+        model = genai.GenerativeModel('gemini-2.0-flash')
+        prompt = f"""以下是永豐金證券投資日報的內容，請萃取出總體經濟分析重點。
+
+輸出格式（純文字，不要 Markdown 符號）：
+
+重要數據
+- xxx（保留數字與漲跌幅）
+
+焦點新聞
+- xxx（一句話，說明事件與市場影響）
+
+規則：繁體中文，保留 Fed、S&P 500 等英文專有名詞，每區最多 4 條，不要廢話。
+
+郵件內容：
+{body[:4000]}"""
+        response = model.generate_content(prompt)
+        return response.text.strip()
+    except Exception:
+        return None
+
+
 def get_gmail_threads(creds):
     service = build('gmail', 'v1', credentials=creds)
     result = service.users().threads().list(
@@ -40,11 +97,17 @@ def get_gmail_threads(creds):
         msgs = t.get('messages', [])
         if msgs:
             headers = {h['name']: h['value'] for h in msgs[0].get('payload', {}).get('headers', [])}
-            emails.append({
+            email = {
                 'from': headers.get('From', ''),
                 'subject': headers.get('Subject', ''),
                 'snippet': msgs[0].get('snippet', '')[:120],
-            })
+                'financial_summary': None,
+            }
+            combined = f"{email['from']} {email['subject']}"
+            if any(kw in combined for kw in FINANCIAL_KEYWORDS):
+                body = get_email_body(service, msgs[0]['id'])
+                email['financial_summary'] = summarize_financial_email(body)
+            emails.append(email)
     return emails
 
 
@@ -145,10 +208,13 @@ def generate_briefing(emails, events, weather=None):
     else:
         lines.append("  今天沒有行程，可以好好利用。")
 
+    regular_emails = [e for e in emails if not e.get('financial_summary')]
+    financial_emails = [e for e in emails if e.get('financial_summary')]
+
     lines += ["", divider, "", "📬 未讀信件"]
 
-    if emails:
-        for e in emails:
+    if regular_emails:
+        for e in regular_emails:
             sender = e['from'].split('<')[0].strip() or e['from']
             lines.append(f"  {sender}")
             lines.append(f"  {e['subject']}")
@@ -157,6 +223,15 @@ def generate_briefing(emails, events, weather=None):
             lines.append("")
     else:
         lines.append("  信箱很乾淨。")
+
+    if financial_emails:
+        lines += ["", divider, "", "📊 金融日報重點"]
+        for e in financial_emails:
+            lines.append(f"  {e['subject']}")
+            lines.append("")
+            for line in e['financial_summary'].splitlines():
+                lines.append(f"  {line}")
+            lines.append("")
 
     lines += [divider, ""]
 
