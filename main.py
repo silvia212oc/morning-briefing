@@ -54,26 +54,70 @@ def get_calendar_events(creds):
     start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     end = now.replace(hour=23, minute=59, second=59, microsecond=0)
 
-    result = service.events().list(
-        calendarId='primary',
-        timeMin=start.isoformat(),
-        timeMax=end.isoformat(),
-        singleEvents=True,
-        orderBy='startTime',
-    ).execute()
+    cal_list = service.calendarList().list().execute()
 
     events = []
-    for e in result.get('items', []):
-        start_time = e['start'].get('dateTime', e['start'].get('date', ''))
-        events.append({
-            'summary': e.get('summary', '（無標題）'),
-            'start': start_time,
-            'location': e.get('location', ''),
-        })
+    seen = set()
+    for cal in cal_list.get('items', []):
+        if not cal.get('selected', True):
+            continue
+        result = service.events().list(
+            calendarId=cal['id'],
+            timeMin=start.isoformat(),
+            timeMax=end.isoformat(),
+            singleEvents=True,
+            orderBy='startTime',
+        ).execute()
+        for e in result.get('items', []):
+            if e['id'] not in seen:
+                seen.add(e['id'])
+                start_time = e['start'].get('dateTime', e['start'].get('date', ''))
+                events.append({
+                    'summary': e.get('summary', '（無標題）'),
+                    'start': start_time,
+                    'location': e.get('location', ''),
+                })
+
+    events.sort(key=lambda x: x['start'])
     return events
 
 
-def generate_briefing(emails, events):
+def get_weather():
+    try:
+        resp = requests.get(
+            'https://api.open-meteo.com/v1/forecast',
+            params={
+                'latitude': 24.9620,
+                'longitude': 121.2248,
+                'daily': 'weathercode,temperature_2m_max,temperature_2m_min,precipitation_probability_max',
+                'timezone': 'Asia/Taipei',
+                'forecast_days': 1,
+            },
+            timeout=10,
+        )
+        d = resp.json()['daily']
+        code = d['weathercode'][0]
+        max_t = round(d['temperature_2m_max'][0])
+        min_t = round(d['temperature_2m_min'][0])
+        rain = d['precipitation_probability_max'][0]
+
+        codes = {
+            0: '晴天', 1: '大致晴朗', 2: '局部多雲', 3: '多雲',
+            45: '有霧', 48: '霧凇',
+            51: '毛毛雨', 53: '毛毛雨', 55: '毛毛雨',
+            61: '小雨', 63: '中雨', 65: '大雨',
+            71: '小雪', 73: '中雪', 75: '大雪',
+            80: '陣雨', 81: '陣雨', 82: '大陣雨',
+            95: '雷雨', 96: '雷雨夾冰雹', 99: '大雷雨',
+        }
+        desc = codes.get(code, '天氣不明')
+        rain_str = f"　降雨機率 {rain}%" if rain and rain > 20 else ""
+        return f"{desc}　{min_t}～{max_t}°C{rain_str}"
+    except Exception:
+        return None
+
+
+def generate_briefing(emails, events, weather=None):
     now = datetime.now(TWN)
     date_str = f"{now.year} 年 {now.month} 月 {now.day} 日 {WEEKDAYS[now.weekday()]}"
     divider = "─" * 24
@@ -81,7 +125,10 @@ def generate_briefing(emails, events):
     lines = [
         f"Silvia 的晨間早報",
         f"{date_str}",
-        divider,
+    ]
+    if weather:
+        lines.append(f"天氣　{weather}")
+    lines += [divider,
         "",
         "今日行程",
     ]
@@ -129,12 +176,16 @@ def generate_briefing(emails, events):
     return '\n'.join(lines)
 
 
-def generate_summary(emails, events):
+def generate_summary(emails, events, weather=None):
     now = datetime.now(TWN)
     weekday = ['一', '二', '三', '四', '五', '六', '日'][now.weekday()]
     date_str = f"{now.month}/{now.day}（{weekday}）早安"
 
     lines = [date_str, ""]
+
+    if weather:
+        lines.append(f"天氣　{weather}")
+        lines.append("")
 
     if events:
         for e in events:
@@ -175,7 +226,8 @@ if __name__ == '__main__':
     creds = load_google_creds()
     emails = get_gmail_threads(creds)
     events = get_calendar_events(creds)
-    briefing = generate_briefing(emails, events)
-    summary = generate_summary(emails, events)
+    weather = get_weather()
+    briefing = generate_briefing(emails, events, weather)
+    summary = generate_summary(emails, events, weather)
     print(briefing)
     update_gist(briefing, summary)
