@@ -102,17 +102,17 @@ def get_weather():
         rain = d['precipitation_probability_max'][0]
 
         codes = {
-            0: '晴天', 1: '大致晴朗', 2: '局部多雲', 3: '多雲',
-            45: '有霧', 48: '霧凇',
-            51: '毛毛雨', 53: '毛毛雨', 55: '毛毛雨',
-            61: '小雨', 63: '中雨', 65: '大雨',
-            71: '小雪', 73: '中雪', 75: '大雪',
-            80: '陣雨', 81: '陣雨', 82: '大陣雨',
-            95: '雷雨', 96: '雷雨夾冰雹', 99: '大雷雨',
+            0: ('☀️', '晴天'), 1: ('🌤️', '大致晴朗'), 2: ('⛅', '局部多雲'), 3: ('☁️', '多雲'),
+            45: ('🌫️', '有霧'), 48: ('🌫️', '霧凇'),
+            51: ('🌦️', '毛毛雨'), 53: ('🌦️', '毛毛雨'), 55: ('🌦️', '毛毛雨'),
+            61: ('🌧️', '小雨'), 63: ('🌧️', '中雨'), 65: ('🌧️', '大雨'),
+            71: ('❄️', '小雪'), 73: ('❄️', '中雪'), 75: ('❄️', '大雪'),
+            80: ('🌧️', '陣雨'), 81: ('🌧️', '陣雨'), 82: ('🌧️', '大陣雨'),
+            95: ('⛈️', '雷雨'), 96: ('⛈️', '雷雨夾冰雹'), 99: ('⛈️', '大雷雨'),
         }
-        desc = codes.get(code, '天氣不明')
-        rain_str = f"　降雨機率 {rain}%" if rain and rain > 20 else ""
-        return f"{desc}　{min_t}～{max_t}°C{rain_str}"
+        emoji, desc = codes.get(code, ('🌡️', '天氣不明'))
+        rain_str = f"　☂️ 降雨機率 {rain}%" if rain and rain > 20 else ""
+        return f"{emoji} {desc}　{min_t}～{max_t}°C{rain_str}"
     except Exception:
         return None
 
@@ -123,14 +123,14 @@ def generate_briefing(emails, events, weather=None):
     divider = "─" * 24
 
     lines = [
-        f"Silvia 的晨間早報",
+        f"🌸 Silvia 的晨間早報",
         f"{date_str}",
     ]
     if weather:
-        lines.append(f"天氣　{weather}")
+        lines.append(f"{weather}")
     lines += [divider,
         "",
-        "今日行程",
+        "🗓️ 今日行程",
     ]
 
     if events:
@@ -145,7 +145,7 @@ def generate_briefing(emails, events, weather=None):
     else:
         lines.append("  今天沒有行程，可以好好利用。")
 
-    lines += ["", divider, "", "重要信件"]
+    lines += ["", divider, "", "📬 未讀信件"]
 
     if emails:
         for e in emails:
@@ -163,15 +163,15 @@ def generate_briefing(emails, events, weather=None):
     if events and emails:
         first = events[0]
         t = first['start'][11:16] if 'T' in first['start'] else '全天'
-        lines.append(f"今天 {t} 有「{first['summary']}」，記得留意時間。信箱有 {len(emails)} 封主要信件，早上可以先掃一遍。")
+        lines.append(f"💡 今天 {t} 有「{first['summary']}」，記得留意時間。信箱有 {len(emails)} 封主要信件，早上可以先掃一遍。")
     elif events:
         first = events[0]
         t = first['start'][11:16] if 'T' in first['start'] else '全天'
-        lines.append(f"今天 {t} 有「{first['summary']}」，記得留意。信件方面很清爽，專心準備行程就好。")
+        lines.append(f"💡 今天 {t} 有「{first['summary']}」，記得留意。信件方面很清爽，專心準備行程就好。")
     elif emails:
-        lines.append(f"今天沒有行程，信箱有 {len(emails)} 封主要信件。可以趁空檔清理信件、推進手邊的事。")
+        lines.append(f"💡 今天沒有行程，信箱有 {len(emails)} 封主要信件。可以趁空檔清理信件、推進手邊的事。")
     else:
-        lines.append("今天行程和信件都是空的，難得清爽的一天，好好安排自己的時間。")
+        lines.append("💡 今天行程和信件都是空的，難得清爽的一天，好好安排自己的時間。")
 
     return '\n'.join(lines)
 
@@ -184,20 +184,20 @@ def generate_summary(emails, events, weather=None):
     lines = [date_str, ""]
 
     if weather:
-        lines.append(f"天氣　{weather}")
+        lines.append(f"{weather}")
         lines.append("")
 
     if events:
         for e in events:
             start = e['start']
             if 'T' in start:
-                lines.append(f"行程  {start[11:16]} {e['summary']}")
+                lines.append(f"🗓️ {start[11:16]} {e['summary']}")
             else:
-                lines.append(f"行程（全天）{e['summary']}")
+                lines.append(f"🗓️ 全天 {e['summary']}")
     else:
         lines.append("今天沒有行程")
 
-    lines.append(f"未讀信件  {len(emails)} 封")
+    lines.append(f"📬 未讀信件 {len(emails)} 封")
 
     return '\n'.join(lines)
 
