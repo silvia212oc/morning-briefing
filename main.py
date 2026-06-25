@@ -8,6 +8,8 @@ from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 
+import stock
+
 TWN = timezone(timedelta(hours=8))
 WEEKDAYS = ['星期一', '星期二', '星期三', '星期四', '星期五', '星期六', '星期日']
 
@@ -214,7 +216,76 @@ def get_weather():
         return None
 
 
-def generate_briefing(emails, events, weather=None):
+def get_stock_data():
+    """抓取追蹤股票的當日分點，並用 Gist 歷史算多日累積排行。
+
+    回傳 (stocks, history)：
+      stocks  -- list，每檔含當日排行與多日累積排行
+      history -- 更新後的歷史 dict，待寫回 Gist
+    """
+    now = datetime.now(TWN)
+    date_str = now.strftime('%Y-%m-%d')
+    history = stock.load_history()
+    stocks = []
+    for stock_id in stock.WATCH_STOCKS:
+        try:
+            result = stock.fetch_stock(stock_id)
+        except Exception:
+            result = None
+        if not result:
+            continue
+        history = stock.save_snapshot(history, stock_id, date_str, result)
+        result['multiday'] = {}
+        for days in (5, 10, 20, 60):
+            agg = stock.accumulate_ranking(history, stock_id, days)
+            if agg:
+                result['multiday'][days] = agg
+        stocks.append(result)
+    return stocks, history
+
+
+def render_stock_section(stocks):
+    """把股票分點資料轉成早報文字行。"""
+    if not stocks:
+        return []
+    divider = "─" * 24
+    lines = ["", divider, "", "💹 主力進出（分點）"]
+    for s in stocks:
+        lines.append(f"  {s['name']} {s['stock_id']}　近1日")
+        lines.append("  買超分點")
+        if s['buyers']:
+            for r in s['buyers']:
+                tag = "　🔁隔日沖" if r.get('daytrade') else ""
+                lines.append(f"    {r['name']}　+{r['buy'] - r['sell']} 張{tag}")
+        else:
+            lines.append("    今日無明顯買超分點")
+        lines.append("  賣超分點")
+        if s['sellers']:
+            for r in s['sellers']:
+                tag = "　🔁隔日沖" if r.get('daytrade') else ""
+                lines.append(f"    {r['name']}　{r['net']} 張{tag}")
+        else:
+            lines.append("    今日無明顯賣超分點")
+
+        # 多日累積（資料夠才顯示）
+        for days in (5, 10, 20, 60):
+            agg = s.get('multiday', {}).get(days)
+            if not agg or agg['days'] < days:
+                continue
+            top_buy = agg['buyers'][0] if agg['buyers'] else None
+            top_sell = agg['sellers'][0] if agg['sellers'] else None
+            parts = []
+            if top_buy:
+                parts.append(f"買 {top_buy['name']} +{top_buy['net']}")
+            if top_sell:
+                parts.append(f"賣 {top_sell['name']} {top_sell['net']}")
+            if parts:
+                lines.append(f"  近{days}日累積　" + "／".join(parts) + " 張")
+        lines.append("")
+    return lines
+
+
+def generate_briefing(emails, events, weather=None, stocks=None):
     now = datetime.now(TWN)
     date_str = f"{now.year} 年 {now.month} 月 {now.day} 日 {WEEKDAYS[now.weekday()]}"
     divider = "─" * 24
@@ -277,6 +348,9 @@ def generate_briefing(emails, events, weather=None):
                 lines.append(f"  {line}")
             lines.append("")
 
+    if stocks:
+        lines += render_stock_section(stocks)
+
     lines += [divider, ""]
 
     if events and emails:
@@ -321,18 +395,21 @@ def generate_summary(emails, events, weather=None):
     return '\n'.join(lines)
 
 
-def update_gist(briefing, summary):
+def update_gist(briefing, summary, history=None):
     headers = {
         'Authorization': f"token {os.environ['GIST_TOKEN']}",
         'Accept': 'application/vnd.github.v3+json',
     }
+    files = {
+        'morning-briefing.md': {'content': briefing},
+        'morning-briefing-summary.txt': {'content': summary},
+    }
+    if history:
+        files[stock.HISTORY_FILE] = {'content': stock.history_file_payload(history)}
     resp = requests.patch(
         f"https://api.github.com/gists/{os.environ['GIST_ID']}",
         headers=headers,
-        json={'files': {
-            'morning-briefing.md': {'content': briefing},
-            'morning-briefing-summary.txt': {'content': summary},
-        }},
+        json={'files': files},
     )
     if resp.status_code == 200:
         print('早報已更新到 Gist！')
@@ -346,7 +423,12 @@ if __name__ == '__main__':
     emails = get_gmail_threads(creds)
     events = get_calendar_events(creds)
     weather = get_weather()
-    briefing = generate_briefing(emails, events, weather)
+    try:
+        stocks, history = get_stock_data()
+    except Exception as e:
+        print(f'股票分點抓取失敗（不影響其他內容）：{e}')
+        stocks, history = [], None
+    briefing = generate_briefing(emails, events, weather, stocks)
     summary = generate_summary(emails, events, weather)
     print(briefing)
-    update_gist(briefing, summary)
+    update_gist(briefing, summary, history)
