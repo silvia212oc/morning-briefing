@@ -39,12 +39,13 @@ def _fetch_bsr_csv(stock_id, max_retries=6):
     """從 BSR 系統抓取某股票當日的分點 CSV 原始文字。失敗回傳 None。"""
     try:
         import ddddocr
-    except Exception:
+    except Exception as e:
+        print(f'[stock] ddddocr 載入失敗：{e}')
         return None
 
     ocr = ddddocr.DdddOcr(show_ad=False)
 
-    for _ in range(max_retries):
+    for attempt in range(1, max_retries + 1):
         try:
             session = requests.Session()
             session.headers.update({
@@ -52,11 +53,14 @@ def _fetch_bsr_csv(stock_id, max_retries=6):
             })
             resp = session.get(BSR_MENU, timeout=20)
             html = resp.text
+            print(f'[stock] {stock_id} 第{attempt}次 BSR首頁 HTTP={resp.status_code} 長度={len(html)}')
 
-            # 取出 ASP.NET 表單隱藏欄位
+            # 取出 ASP.NET 表單隱藏欄位（name= 或 id= 都可能）
             def hidden(name):
                 m = re.search(
-                    r'id="%s"[^>]*value="([^"]*)"' % re.escape(name), html
+                    r'(?:id|name)="%s"[^>]*value="([^"]*)"' % re.escape(name), html
+                ) or re.search(
+                    r'value="([^"]*)"[^>]*(?:id|name)="%s"' % re.escape(name), html
                 )
                 return m.group(1) if m else ''
 
@@ -64,15 +68,21 @@ def _fetch_bsr_csv(stock_id, max_retries=6):
             viewstate_gen = hidden('__VIEWSTATEGENERATOR')
             eventvalidation = hidden('__EVENTVALIDATION')
 
-            # 取出驗證碼圖片網址
-            m = re.search(r'(CaptchaImage\.aspx\?guid=[0-9a-fA-F-]+)', html)
+            # 取出驗證碼圖片網址（支援不同格式）
+            m = re.search(r'(CaptchaImage\.aspx[^"\'>\s]*)', html)
             if not m:
+                print(f'[stock] {stock_id} 第{attempt}次 找不到驗證碼圖片網址，跳過')
+                # 輸出部分 HTML 幫助診斷
+                if attempt == 1:
+                    print(f'[stock] HTML前500字：{html[:500]}')
                 continue
             captcha_url = BSR_BASE + m.group(1)
             img = session.get(captcha_url, timeout=20).content
             code = ocr.classification(img)
             code = re.sub(r'[^A-Za-z0-9]', '', code)
+            print(f'[stock] {stock_id} 第{attempt}次 OCR驗證碼="{code}"')
             if len(code) < 4:
+                print(f'[stock] {stock_id} 第{attempt}次 驗證碼太短，跳過')
                 continue
 
             payload = {
@@ -86,22 +96,36 @@ def _fetch_bsr_csv(stock_id, max_retries=6):
             }
             r2 = session.post(BSR_MENU, data=payload, timeout=20)
             page = r2.text
+            print(f'[stock] {stock_id} 第{attempt}次 POST HTTP={r2.status_code} 回應長度={len(page)}')
 
             # 成功的話頁面會帶一個 CSV 下載連結
-            m2 = re.search(r'(HyperLink_DownloadCSV[^>]*href="([^"]+)")', page)
+            m2 = re.search(r'href="([^"]*\.csv[^"]*)"', page, re.IGNORECASE)
             if not m2:
-                # 驗證碼錯誤或查無資料，重試
+                # 找不到下載連結，也可能是驗證碼錯誤
+                err_m = re.search(r'(驗證碼|錯誤|error|invalid)', page, re.IGNORECASE)
+                reason = err_m.group(0) if err_m else '找不到CSV連結'
+                print(f'[stock] {stock_id} 第{attempt}次 {reason}，重試')
+                if attempt == 1:
+                    print(f'[stock] POST回應前300字：{page[:300]}')
                 continue
-            csv_href = m2.group(2)
-            csv_url = BSR_BASE + csv_href.lstrip('./')
+            csv_href = m2.group(1)
+            if not csv_href.startswith('http'):
+                csv_url = BSR_BASE + csv_href.lstrip('./')
+            else:
+                csv_url = csv_href
+            print(f'[stock] {stock_id} 第{attempt}次 CSV網址={csv_url}')
             csv_resp = session.get(csv_url, timeout=20)
             csv_resp.encoding = 'big5'
             text = csv_resp.text
-            if '券商' in text or ',' in text:
+            print(f'[stock] {stock_id} 第{attempt}次 CSV長度={len(text)} 前100字：{text[:100]}')
+            if '券商' in text or (',' in text and len(text) > 100):
                 return text
-        except Exception:
+            print(f'[stock] {stock_id} 第{attempt}次 CSV內容異常，重試')
+        except Exception as e:
+            print(f'[stock] {stock_id} 第{attempt}次 例外：{e}')
             time.sleep(1)
             continue
+    print(f'[stock] {stock_id} 所有嘗試均失敗')
     return None
 
 
@@ -168,13 +192,16 @@ def fetch_stock(stock_id):
     """抓取並分析單一股票的當日分點資料。失敗回傳 None。"""
     text = _fetch_bsr_csv(stock_id)
     if not text:
+        print(f'[stock] {stock_id} 抓取 CSV 失敗')
         return None
     brokers = _parse_bsr_csv(text)
     if not brokers:
+        print(f'[stock] {stock_id} 解析分點失敗，CSV 前200字：{text[:200]}')
         return None
     result = _analyze(brokers)
     result['stock_id'] = stock_id
     result['name'] = WATCH_STOCKS.get(stock_id, stock_id)
+    print(f'[stock] {stock_id} 成功：買超{len(result["buyers"])}筆 賣超{len(result["sellers"])}筆')
     return result
 
 
