@@ -35,6 +35,21 @@ DAYTRADE_MIN_LOTS = 100
 DAYTRADE_RATIO = 0.5
 
 
+def _find_inner_form_url(session):
+    """bsMenu.aspx 是外框頁（frameset），實際表單在內框。回傳內框 URL。"""
+    resp = session.get(BSR_MENU, timeout=20)
+    html = resp.text
+    # 找 <frame src="..."> 或 <iframe src="...">
+    m = re.search(r'<(?:i?frame)[^>]+src=["\']([^"\']+)["\']', html, re.IGNORECASE)
+    if m:
+        src = m.group(1)
+        url = src if src.startswith('http') else BSR_BASE + src.lstrip('/')
+        print(f'[stock] 內框表單 URL：{url}')
+        return url
+    print(f'[stock] 未找到內框，直接用主頁（長度={len(html)}）')
+    return BSR_MENU
+
+
 def _fetch_bsr_csv(stock_id, max_retries=6):
     """從 BSR 系統抓取某股票當日的分點 CSV 原始文字。失敗回傳 None。"""
     try:
@@ -44,18 +59,22 @@ def _fetch_bsr_csv(stock_id, max_retries=6):
         return None
 
     ocr = ddddocr.DdddOcr(show_ad=False)
+    session = requests.Session()
+    session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
+
+    # 先找到真正的表單頁（內框）
+    try:
+        form_url = _find_inner_form_url(session)
+    except Exception as e:
+        print(f'[stock] 找內框失敗：{e}')
+        return None
 
     for attempt in range(1, max_retries + 1):
         try:
-            session = requests.Session()
-            session.headers.update({
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-            })
-            resp = session.get(BSR_MENU, timeout=20)
+            resp = session.get(form_url, timeout=20)
             html = resp.text
-            print(f'[stock] {stock_id} 第{attempt}次 BSR首頁 HTTP={resp.status_code} 長度={len(html)}')
+            print(f'[stock] {stock_id} 第{attempt}次 表單頁 HTTP={resp.status_code} 長度={len(html)}')
 
-            # 取出 ASP.NET 表單隱藏欄位（name= 或 id= 都可能）
             def hidden(name):
                 m = re.search(
                     r'(?:id|name)="%s"[^>]*value="([^"]*)"' % re.escape(name), html
@@ -68,21 +87,16 @@ def _fetch_bsr_csv(stock_id, max_retries=6):
             viewstate_gen = hidden('__VIEWSTATEGENERATOR')
             eventvalidation = hidden('__EVENTVALIDATION')
 
-            # 取出驗證碼圖片網址（支援不同格式）
+            # 取得驗證碼
             m = re.search(r'(CaptchaImage\.aspx[^"\'>\s]*)', html)
             if not m:
-                print(f'[stock] {stock_id} 第{attempt}次 找不到驗證碼圖片網址，跳過')
-                # 輸出部分 HTML 幫助診斷
-                if attempt == 1:
-                    print(f'[stock] HTML前500字：{html[:500]}')
+                print(f'[stock] {stock_id} 第{attempt}次 找不到驗證碼，頁面前400字：{html[:400]}')
                 continue
             captcha_url = BSR_BASE + m.group(1)
             img = session.get(captcha_url, timeout=20).content
-            code = ocr.classification(img)
-            code = re.sub(r'[^A-Za-z0-9]', '', code)
-            print(f'[stock] {stock_id} 第{attempt}次 OCR驗證碼="{code}"')
+            code = re.sub(r'[^A-Za-z0-9]', '', ocr.classification(img))
+            print(f'[stock] {stock_id} 第{attempt}次 OCR="{code}"')
             if len(code) < 4:
-                print(f'[stock] {stock_id} 第{attempt}次 驗證碼太短，跳過')
                 continue
 
             payload = {
@@ -94,37 +108,28 @@ def _fetch_bsr_csv(stock_id, max_retries=6):
                 'CaptchaControl1': code,
                 'btnOK': '查詢',
             }
-            r2 = session.post(BSR_MENU, data=payload, timeout=20)
+            r2 = session.post(form_url, data=payload, timeout=20)
             page = r2.text
-            print(f'[stock] {stock_id} 第{attempt}次 POST HTTP={r2.status_code} 回應長度={len(page)}')
+            print(f'[stock] {stock_id} 第{attempt}次 POST HTTP={r2.status_code} 長度={len(page)}')
 
-            # 成功的話頁面會帶一個 CSV 下載連結
             m2 = re.search(r'href="([^"]*\.csv[^"]*)"', page, re.IGNORECASE)
             if not m2:
-                # 找不到下載連結，也可能是驗證碼錯誤
-                err_m = re.search(r'(驗證碼|錯誤|error|invalid)', page, re.IGNORECASE)
-                reason = err_m.group(0) if err_m else '找不到CSV連結'
-                print(f'[stock] {stock_id} 第{attempt}次 {reason}，重試')
-                if attempt == 1:
-                    print(f'[stock] POST回應前300字：{page[:300]}')
+                reason = re.search(r'(驗證碼|錯誤|error|invalid|查無)', page, re.IGNORECASE)
+                print(f'[stock] {stock_id} 第{attempt}次 無CSV連結，原因={reason.group(0) if reason else "未知"}，頁面前200字：{page[:200]}')
                 continue
             csv_href = m2.group(1)
-            if not csv_href.startswith('http'):
-                csv_url = BSR_BASE + csv_href.lstrip('./')
-            else:
-                csv_url = csv_href
-            print(f'[stock] {stock_id} 第{attempt}次 CSV網址={csv_url}')
+            csv_url = csv_href if csv_href.startswith('http') else BSR_BASE + csv_href.lstrip('./')
+            print(f'[stock] {stock_id} 第{attempt}次 CSV={csv_url}')
             csv_resp = session.get(csv_url, timeout=20)
             csv_resp.encoding = 'big5'
             text = csv_resp.text
-            print(f'[stock] {stock_id} 第{attempt}次 CSV長度={len(text)} 前100字：{text[:100]}')
-            if '券商' in text or (',' in text and len(text) > 100):
+            print(f'[stock] {stock_id} 第{attempt}次 CSV長度={len(text)} 前80字：{text[:80]}')
+            if len(text) > 100 and ('券商' in text or ',' in text):
                 return text
             print(f'[stock] {stock_id} 第{attempt}次 CSV內容異常，重試')
         except Exception as e:
             print(f'[stock] {stock_id} 第{attempt}次 例外：{e}')
             time.sleep(1)
-            continue
     print(f'[stock] {stock_id} 所有嘗試均失敗')
     return None
 
